@@ -1,36 +1,35 @@
 /*
  * combine KMC and ODE to calculate scale_factor
  */
+#include <algorithm>
+#include <cmath>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <iterator>
+#include <map>
 #include <random>
-#include <cstdio>
-#include<iomanip>
-#include<stdlib.h>
-#include<vector>
-#include<math.h>
-#include<algorithm>
-#include<iostream>
-#include<fstream>
-#include<iterator>
-#include "my_rand.h"    // header file for random number generation
-#include "efficient_explicit_sequence_record_number.h"  // header file for species and sequence update
+#include <string>
+#include <vector>
+
+#include "add_schedule.h"
+#include "efficient_explicit_sequence_record_number.h"
+#include "my_rand.h"
 #include "molecular_weight.h"
 #include "ode.h"
-#include <utility>
-#include <time.h>
-#include <add_schedule.h>
-#include <random>
 
 using namespace std;
 
 int main( ) {
 
-    srand(time(NULL));
+    srandom( (unsigned)time(NULL) );
 
     clock_t start,end;
     start=clock();
 
     std::string data_dir = "/Users/yueyue/Dropbox/Mac/Documents/HKUST/PhD_project/P2_from_sequence_to_property/effATRP_MMA/src/";
-    std::string out_dir = "/Users/yueyue/Dropbox/Mac/Documents/HKUST/PhD_project/P2_from_sequence_to_property/effATRP_MMA/output/data20250413/PDI/1e5/4/1";
+    std::string out_dir = "/Users/yueyue/Dropbox/Mac/Documents/HKUST/PhD_project/P2_from_sequence_to_property/effATRP_MMA/output/data20250413/new_CL/1e5/1";
 
     //............. Declaration of varibles begins.....//
     const double Na = 6.022e23;
@@ -68,8 +67,6 @@ int main( ) {
     double num_Dr[1] = {0};
     double num_Pr[1] = {0};
     double num_P[1] = {0};
-    const int ccd_size = 1000;
-    double ccd[ccd_size][ccd_size];
 
     double over_x_int = 0;
     double Mn_int = 0;
@@ -83,15 +80,8 @@ int main( ) {
     double start_t=0.0, end_t=5000.0, dt_t=5.0;
     double radical[6] = {0.0};
     double pre_add_spe3 = 0.0,add_spe2 = 0.0,pre_add_spe2 = 0.0;
-    int N[500] = {0};
-    vector_type r(6);
-    r[0]=0.023/ADD_TIMES;
-    r[1]=0.0115/ADD_TIMES;
-    r[4]=4.67;
-    vector_type Rad(6);
-    Rad[0]=0.023/ADD_TIMES;
-    Rad[1]=0.0115/ADD_TIMES;
-    Rad[4]=4.67;
+    int N[50000] = {0};
+
     poly_chain poly_test;
     stiff_system stiff_sys;
     stiff_system_jacobi system_jacobi;
@@ -103,16 +93,10 @@ int main( ) {
     double conv_in, temp_in, init_in, mono1_in, mono2_in;
     double solv_mol = 0;
 
-//    int iter_counter=0;
-    for (int i = 0; i < ccd_size; i++) {
-        for (int j = 0; j < ccd_size; j++) {
-            ccd[i][j] = 0;
-        }
-    }
     //............. Declaration of varibles ends......//
     //............. Assigning Input  data to the varibles from input.txt, Begins ......//
 
-    ifstream input0(data_dir + "input0.txt");
+    ifstream input0(data_dir + "input.txt");
     input0 >> scale_fac;
     input0 >> temp;
     for (int i = 0; i < 2; i++)
@@ -142,23 +126,27 @@ int main( ) {
     ofstream molwt(out_dir+"Hy_molecularweight.out");
     ofstream speciesout(out_dir+"Hy_species.out");
     ofstream species_con(out_dir+"Hy_spe_con.out");
-    ofstream wf(out_dir + "Hy_frication.out");
     ofstream rat(out_dir + "Hy_rate.out");
     ofstream ode3(out_dir + "Hy_ode3.out");
     ofstream index(out_dir + "Hy_reaction_index.out");
     ofstream sf(out_dir + "Hy_scaling_factor.out");
     ofstream aver(out_dir + "Hy_aver_spe3.out");
-    ofstream timeput(out_dir + "Hy_timeOutput.out");
-//    ofstream sf2(out_dir + "Hy_scaling_factor2.out");
     ofstream allchain(out_dir + "Hy_all_chain.out");
     ofstream allchaininformation(out_dir + "Hy_allchain_information.txt");
+    ofstream kmc_log(out_dir+"kmc_add_times.txt");
 
-/*    double dpnThresholds[] = {10, 20, 30, 40, 50, 60, 80, 100};
+    //........................ 1. chain length output setting...........//
+    double dpnThresholds[] = {10, 20, 30, 40, 50, 60, 80, 100};
     const int N_THRESH = sizeof(dpnThresholds) / sizeof(dpnThresholds[0]);
     bool hasOutput[N_THRESH];
     for(int i=0; i<N_THRESH; i++){
         hasOutput[i] = false;   // 初始都还没输出过
-    }*/
+    }
+
+    //........................conversion output setting...........//
+/*    double convThresholds[] = {0.10, 0.15, 0.20, 0.25, 0.30,0.35,0.40,0.45,0.50};
+    const int N_THRESH = sizeof(convThresholds) / sizeof(convThresholds[0]);
+    bool hasOutput[N_THRESH] = {false};*/
 
     conv << "time" << "\t" << "conversion(s)" << "\t" << "overall_conversion" << endl;
     molwt << "time" << "\t" <<"conversion"<< "\t" << "Mn" << "\t" << "\t" << "Mw" << "\t"  << "pdi" << "\t"  << "Dpn"<< endl;
@@ -168,10 +156,9 @@ int main( ) {
 
     speciesout <<"time" << "\t"<<"species[0]" <<"\t"  <<"species[1] "<<"\t" <<"species[2]"<< "\t" <<"species[3] "<< "\t"<<" species[4]"<<  "\t"<<"species[5] " << endl;
     speciesout <<"time" << "\t"<<"Dr" <<"\t"  <<"C "<<"\t" <<"CX"<< "\t" <<"Pr* "<< "\t"<<" M"<<  "\t"<<"P" << endl;
-    timeput<<"time"<<" "<<"scale_fac"<<" "<<"pre_add_spe3"<<" "<<"pre_d_time_spe3"<<" "<<"aver_spe3"<<endl;
+//    timeput<<"time"<<" "<<"scale_fac"<<" "<<"pre_add_spe3"<<" "<<"pre_d_time_spe3"<<" "<<"aver_spe3"<<endl;
 
     init_vol=(M0*mol_frac[0])/(Na*4.67); //4.67=species[4]/ (Na * volume);
-
     volume = init_vol;                   //total volume
     cout << volume << endl;
 
@@ -180,26 +167,30 @@ int main( ) {
     species[1] = round(init_conc[1]* init_vol * Na + 0.5);
     species[4] = round(4.67 * init_vol * Na + 0.5);
 
-//    cout << species[0]/ (Na * volume)<< "\t" << species[1]/ (Na * volume)<< "\t" << species[2] / (Na * volume)<< "\t" << species[3]/ (Na * volume)<< "\t"<<species[4]/ (Na * volume) << "\t" << species[5]/ (Na * volume)<< "\t"<< endl;
-//    cout << species[0]<< "\t" << species[1]<< "\t" << species[2]<< "\t" << species[3]<< "\t"<<species[4] << "\t" << species[5]<< "\t"<< endl;
-
     M_initial[0] = species[4];
     M_start[0] = species[4];
     //.......................adjust MWD .......................//
 
+    //............2. adjust PDI ..........//
     int add_times = ADD_TIMES, add_species0 ,add_species1 ,add_species4 ;
     add_species0 = round( species[0]/add_times +0.5) ;
     add_species1 = round ( species[1]/add_times +0.5);
-    //add_species4 = add_species0 * int(4.67/0.023);
 
     // Initial species adjustment
     species[0] = add_species0;
     species[1] = add_species1;
-    //species[4] = add_species4;
 
     vector<int> Dr(species[0],0);
-    std::vector<int> Dr_num(species[0],0);
+    std::vector<int> Dr_num(add_species0,0);
     std::map<int, int> allchainsinfo;  // 创建一个新的map，键为链的序号，值为链的长度
+
+    vector_type r(6);
+    for (int i = 0; i < 6; ++i){
+        r[i] = species[i] / (Na * volume);
+        cout<<r[i]<<" ";
+    }
+    cout<<endl;
+
     // 初始化所有链的长度为0，并初始化Dr_num
     int i = 0;
     for (int i = 0; i < Dr.size(); ++i)
@@ -219,27 +210,26 @@ int main( ) {
     //................................... KMC Loop Begins ......//
     int flag_4 = 1, flag_6 = 0, flag_add = 0, flag_write = 0;
     int count_addtimes = 0;
-    double next_add_time = 0.0; // Start adding earlier for broader PDI
+    double next_add_time = ADD_INTERVAL; // Start adding earlier for broader PDI
 //    double ADD_INTERVAL = 500.0;
 
-/*    allchaininformation <<Dpn<<" ";
+    allchaininformation <<Dpn<<" ";
     for (auto& pair : allchainsinfo) {
         allchaininformation  << pair.second<<"  ";
     }
-    allchaininformation <<allchainsinfo.size() << "  " << endl;*/ //for CL
+    allchaininformation <<allchainsinfo.size() << "  " << endl; //for CL output
 
-    // Define specific conversion thresholds for output
-    double convThresholds[] = {0.10, 0.15, 0.20, 0.25, 0.30,0.35,0.40,0.45,0.50};
-    const int N_THRESH = sizeof(convThresholds) / sizeof(convThresholds[0]);
-    bool hasOutput[N_THRESH] = {false};
+
 
     while (time <= 4000) {
-//    while (time <= 8000  or  (time >= 7200 and Dpn <160)) {
-        //....................adjust MWD...............................//
+
+        //....................2. adjust PDI and MWD...............................//
         if (time > next_add_time && count_addtimes < (ADD_TIMES-1) && flag_add == 0) {
+            kmc_log << time << endl;
+
             species[0] += add_species0;
             species[1] += add_species1;
-            //species[4] += add_species4;
+
             count_addtimes++;
             Dr.insert(Dr.end(), add_species0, 0);
             int current_size = allchainsinfo.size();
@@ -250,23 +240,14 @@ int main( ) {
             flag_add = 1;
             next_add_time += ADD_INTERVAL; // Adjust timing for next addition
         }
-        if (time > next_add_time) flag_add = 0;
-
-/*            if (time > 4500 && count_addtimes < add_times && flag_add == 0){
-                species[0] += add_species0;
-                species[1] += add_species1;
-                species[4] += add_species4;
-                count_addtimes++;
-                Dr.insert(Dr.end(), add_species0, 0);
-                flag_add  = 1;
-            }
-        flag_add  = 0;*/
+        flag_add = 0;
 
 
-       rand_11 =(double) rand() / RAND_MAX;
-       rand_22 = (double) rand() / RAND_MAX;
-//        rand_11 = 1.0 * (my_rand(RAND_MAX - 1) + 1.0) / RAND_MAX;      //random number for next rxn time step
-//        rand_22 = 1.0 * (my_rand(RAND_MAX - 1) + 1.0) / RAND_MAX;      //random number for event excution
+        std::mt19937_64 rng(std::random_device{}());
+        std::uniform_real_distribution<double> uni(0.0, 1.0);
+        double rand_11 = uni(rng);
+        double rand_22 = uni(rng);
+
 
         total_rate = 0.0;
         for (int i = 0; i < 4; i++) total_rate = total_rate + rate[i];
@@ -292,7 +273,6 @@ int main( ) {
 
         time += tau;       // reaction time, sec
         D_time += tau;
-//        d_time += tau;
         d_time_0 += tau;
         d_time_1 += tau;
         d_time_2 += tau;
@@ -301,57 +281,49 @@ int main( ) {
         pre_d_time_spe3 += tau;
 
 
-//calculate the SF at beginning with 1
-        if (d_time_1 > 0.01 && flag0 == 0 && pre_d_time_spe3!=0.0){
-//ODE
-            ode(stiff_sys, system_jacobi,r,Rad, d_time_1);
+        //.............calculate the SF ............//
+        if (d_time_1 > 0.0001 && flag0 == 0 && pre_d_time_spe3!=0.0){
+//at beginning with 1
+            ode(stiff_sys, system_jacobi,r,d_time_1);
             radical_ode3 = r[3];
+
             aver_spe3 = 1;
             scale_fac =aver_spe3/ (Na * volume) / radical_ode3;
-            flag0 = 1;
-            sf<<time<<"  "<<scale_fac <<" "<< pre_add_spe3/pre_d_time_spe3<<endl;
+
+            sf<<time<<"  "<<scale_fac <<" "<< aver_spe3/ (Na * volume)<<" "<<  radical_ode3<<" "<<"1111111"<<endl;
             cout<<scale_fac <<" "<< pre_add_spe3/pre_d_time_spe3<<endl;
             d_time_1=0.0;
             pre_add_spe3 = 0;
             pre_d_time_spe3 = 0;
+            flag0 = 1;
         }
 
-// calculate the SF within 5s (average)
-        if (d_time_1>1.0  && pre_d_time_spe3!=0.0 && pre_add_spe3/pre_d_time_spe3>1){
-            ode(stiff_sys, system_jacobi,r,Rad,d_time_1);
+// calculate the SF within 20s (average)
+        if (d_time_1>20.0  && pre_d_time_spe3!=0.0 ){
+            ode(stiff_sys, system_jacobi,r,d_time_1);
             radical_ode3 = r[3];
 
             aver_spe3 = pre_add_spe3/pre_d_time_spe3;
             scale_fac = (aver_spe3/(Na * volume))/radical_ode3;
 
-            sf<<" "<<scale_fac<<"    "<<aver_spe3<<"   "<< aver_spe3/(Na * volume)<<"   "<<radical_ode3<<endl;
+            sf<<time<<"  "<<scale_fac <<" "<< aver_spe3/ (Na * volume)<<" "<<  radical_ode3<<" "<<  pre_add_spe3/pre_d_time_spe3<<endl;
+
             pre_add_spe3 = 0;
             pre_d_time_spe3 = 0;
             d_time_1=0.0;
         }
 
 
-//        timeput<<time<<" "<<scale_fac<<" "<<pre_add_spe3<<" "<<pre_d_time_spe3<<" "<<aver_spe3<<endl;
-//        cout<<rand_11<<" "<<rand_22<<endl;
-
-
-// Assume Dr, poly_test.chain1, and Pr are vectors of data to be written
 
             if (D_time >= 1.0) {
 
-/*                allchaininformation <<Dpn<<" ";
-                for (auto& pair : allchainsinfo) {
-                     allchaininformation  << pair.second<<"  ";
-                }
-                allchaininformation  << "  " << endl;*/
-
-                // Output chain information
-                for (int i = 0; i < N_THRESH; i++) {
-                    if (!hasOutput[i] && conversion[0] >= convThresholds[i]) {
+                //...................1. Output chain information...................//
+                /*for (int i = 0; i < N_THRESH; i++) {
+                    if (!hasOutput[i] && conversion[0] >= covThresholds[i]) {
                         hasOutput[i] = true;
-                        cout << "Outputting at conversion: " << convThresholds[i] << endl; // 调试输出
+                        cout << "Outputting at conversion: " << covThresholds[i] << endl; // 调试输出
                         // 现有输出代码保持不变
-                        std::string fname = out_dir + "Hy_all_chain_conv_" + to_string(int(convThresholds[i] * 100)) + ".out";
+                        std::string fname = out_dir + "Hy_all_chain_conv_" + to_string(int(covThresholds[i] * 100)) + ".out";
                         ofstream outChain(fname);
                         if (!outChain.is_open()) {
                             cerr << "Failed to open file: " << fname << endl;
@@ -369,22 +341,18 @@ int main( ) {
                         outChain << endl;
                         outChain.close();
                     }
-                }
+                }*/
 
             D_time = 0;
             speciesout << time;
             species_con << time;
             index << time;
             ode3<<time;
-//            sf2<<time;
 
             speciesout<<" " << species[0]<<" "<< species[1]<<" "<< species[2]<<" "<< species[3]<<" "<< species[4]<<" " << species[5]<<" "<< endl;
-            species_con<<" " << species[0]/ (Na * volume)<<" "<< species[1]/ (Na * volume)<<" "<< species[2]/ (Na * volume)<<" "<< species[3]/ (Na * volume)<<" "<< 1-species[4]/ (4.67*Na * volume)<<" " << species[5]/ (Na * volume)<<" "<< endl;
+            species_con<<" " << species[0]/ (Na * volume)<<" "<< species[1]/ (Na * volume)<<" "<< species[2]/ (Na * volume)<<" "<< species[3]/ (Na * volume)<<" "<< species[4]/ (Na * volume)<<" " << species[5]/ (Na * volume)<<" "<< endl;
             index << " " << index0 << " " << index1 << " " << index2 << " " << index3 <<endl;
             index << " " << rate[0] << " " << rate[1]  << " " << rate[2]  << " " << rate[3]  <<endl;
-
-//            sf2<< " " <<over_x<<"  "<<scale_fac<<"  "<< pre_add_spe3/pre_d_time_spe3/ (Na * volume)/scale_fac<<endl;
-            //ode3<<"   "<<scale_fac<<"    "<<pre_add_spe3/pre_d_time_spe3/(Na * volume)/scale_fac <<"    "<<radical_ode3<<endl;
 
             rat <<time<<"  " <<rate[0]<<" " <<rate[1]<<" " <<rate[2]<<" " <<rate[3]<<endl;
 
@@ -399,8 +367,7 @@ int main( ) {
 
             f_inst[0] = (M_present[0] + M_start[0]) / (M_sum);
             F_inst[0] = (M_start[0] - M_present[0]) / (M_diff);
-            //          f_inst[1] = (M_present[1] + M_start[1]) / (M_sum);
-            //          F_inst[1] = (M_start[1] - M_present[1]) / (M_diff);
+
             M_start[0] = M_present[0];
             //          M_start[1] = M_present[1];
             num_M[0] = 0;
@@ -438,7 +405,9 @@ int main( ) {
                     fract << time << "\t" << f[0] << "\t" << F[0] <<  "\t" << f_inst[0]
                           << "\t" << F_inst[0]  << endl;
 
-                    /*for(int i=0; i<N_THRESH; i++){
+
+                    //...................1. Output chain information...................//
+                    for(int i=0; i<N_THRESH; i++){
                         // 如果 Dpn >= dpnThresholds[i] 且还没输出过，就写文件
                         if(!hasOutput[i] && (Dpn >= dpnThresholds[i])) {
                             hasOutput[i] = true; // 标记已经输出过
@@ -462,10 +431,13 @@ int main( ) {
 
                             outChain.close();
                         }
-                    }*/
+                    }
+
+
+
                 }
 
-        }           // Data analuysis loop ends.............//
+        }
 
 
         efficient_explicit_sequence_record_number(reaction_index,
@@ -494,7 +466,6 @@ int main( ) {
         M_sum = 0.0;
         M_diff = 0.0;
 
-        // Data analuysis (for conversion and composition etc) loop begins...............//
     }
 
 
@@ -520,15 +491,12 @@ int main( ) {
         f[0] = species[4] / species_sum;   //avg compostion of monomers in the feed
         F[0] = num_M[0] / (num_M_sum);       //avg compostion of monomers in the dead end polymer chains
 
-        //Dpn = num_M_sum / (poly_test.chain1.size()+ Dr.size()+ Pr.size()/scale_fac);    // degree of polymerization
         Dpn = num_M_sum / (poly_test.chain1.size()+ Dr.size()+ Pr.size());    // degree of polymerization
         molwt << time << "\t" << Mn << "\t" << "\t" << Mw << "\t" << "\t" << pdi << "\t" << "\t" << Dpn << "\t" << Mz<< endl;
         fract << time << "\t" << f[0] << "\t" << F[0] <<  "\t" << f_inst[0]
               << "\t" << F_inst[0]  << endl;
 
     }
-
-
 
 
     cout<<"Dr.size()"<<  Dr.size()<<endl;

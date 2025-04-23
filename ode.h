@@ -128,63 +128,66 @@ struct stiff_system_jacobi {
 }*/
 
 
-void ode(stiff_system, stiff_system_jacobi,
-         vector_type &r, vector_type & /* Rad */,
-         double dt)                       // dt = KMC这一步走了多长时间
+/* -----------------------------------------------------------------
+ * ODE 驱动 —— 与 KMC 同步的刚性体系积分
+ * 传入 :  r  当前时刻的 6 维浓度 (mol·L⁻¹)
+ *         dt 本次 KMC 步长 (s)
+ * 返回 :  r  更新到 t + dt 的浓度
+ * ----------------------------------------------------------------- */
+void ode( stiff_system ,
+          stiff_system_jacobi ,
+          vector_type &r ,
+          double dt )
 {
-    /* --------- 静态量只初始化一次 --------- */
-    static double INIT_DR = 0.0, INIT_C = 0.0;
-    static bool   INIT_SET = false;
-    static int    GLOBAL_ADDED = 0;
-    static double T_GLOBAL = 0.0;          // <<< 绝对时间基准
+    /* ----------- 全局时间 & 已加料次数 ----------- */
+    static double T_GLOBAL   = 0.0;    // 绝对时间 (s)
+    static int    N_INJECTED = 0;      // 已注料次数
 
-    if (!INIT_SET) {
-        INIT_DR  = r[0];
-        INIT_C   = r[1];
-        INIT_SET = true;
-    }
+    /* ----------- 每次投料增加的浓度 (mol·L⁻¹) ----------- */
+    const double ADD_DR = 0.023  / ADD_TIMES;   // DR  (与 KMC 初值保持一致)
+    const double ADD_C  = 0.0115 / ADD_TIMES;   // C
 
-    const double add_conc_0 = INIT_DR / ADD_TIMES;
-    const double add_conc_1 = INIT_C  / ADD_TIMES;
+    const double t_end = T_GLOBAL + dt;         // 本次积分的终点
 
-    double t_end = T_GLOBAL + dt;          // 本次需要积分到的绝对时间
-    vector_type x = r;
+    vector_type x = r;                          // 工作副本
 
-    while (T_GLOBAL < t_end) {
+    while( T_GLOBAL < t_end )
+    {
+        /* --- 本阶段需要积分到的时间 --- */
+        const double t_next_inj  = (N_INJECTED + 1) * ADD_INTERVAL;
+        const double t_stage_end = std::min( t_next_inj , t_end );
 
-        // 下一个“该加料”的绝对时刻
-        double t_next_inj = (GLOBAL_ADDED + 1) * ADD_INTERVAL;
-
-        // 本阶段积分到 min(下一次加料, 本次时间终点)
-        double t_stage_end = std::min(t_next_inj, t_end);
-
+        /* --- Rosenbrock4 刚性积分 --- */
         integrate_const(
-                make_dense_output< rosenbrock4<double> >(1e-6, 1e-6),
-                make_pair(stiff_system(), stiff_system_jacobi()),
-                x,
-                T_GLOBAL,                   // 起点
-                t_stage_end,                // 终点
-                (t_stage_end - T_GLOBAL)/10.0
+                make_dense_output< rosenbrock4<double> >( 1e-6 , 1e-6 ),
+                make_pair( stiff_system() , stiff_system_jacobi() ),
+                x ,
+                T_GLOBAL ,
+                t_stage_end ,
+                ( t_stage_end - T_GLOBAL ) / 100.0               // 步长 = 1/10 阶段
         );
 
-        T_GLOBAL = t_stage_end;
+        T_GLOBAL = t_stage_end;              // 推进全局时钟
 
-        /* ----------- 只有真正跨过1000 s倍数才加料 ----------- */
-        // 建议的末尾判断（更安全）
-        if( T_GLOBAL >= t_next_inj - 1e-12 &&
-            GLOBAL_ADDED < ADD_TIMES - 1 )
+        /* --- 跨过投料节点：补加浓度 --- */
+        if( T_GLOBAL >= t_next_inj - 1e-6 &&
+            N_INJECTED < ADD_TIMES - 1 )
         {
-            x[0] += add_conc_0;
-            x[1] += add_conc_1;
-            ++GLOBAL_ADDED;
-        }
-
-        else if (T_GLOBAL >= t_next_inj - 1e-12) {
-            ++GLOBAL_ADDED;   // 记录最后一次，但不再加料
+            x[0] += ADD_DR;                  // DR
+            x[1] += ADD_C;                   // C
+            ++N_INJECTED;
+            std::ofstream ode_log("/Users/yueyue/Dropbox/Mac/Documents/HKUST/PhD_project/P2_from_sequence_to_property/effATRP_MMA/output/data20250413/PDI/1e5/4/ode_add_times.txt", std::ios::app);
+            ode_log << T_GLOBAL << "\n";
+            ode_log.close();
+    }
+        else if( T_GLOBAL >= t_next_inj - 1e-6 )
+        {
+            ++N_INJECTED;                    // 最后一段仅记录次数
         }
     }
 
-    r = x;   // 把最新状态传回主程序
+    r = x;                                   // 把积分后的状态传回主程序
 }
+
 
 
