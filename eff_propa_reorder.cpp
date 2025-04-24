@@ -1,329 +1,437 @@
 /*
- * combine KMC and ODE to calculate scale_factor
+ * main.cpp
+ * Hybrid KMC simulation and ODE integration method for ATRP polymerization process
  */
+
 #include <algorithm>
 #include <cmath>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <iterator>
 #include <map>
 #include <random>
 #include <string>
 #include <vector>
 
-#include "add_schedule.h"
-#include "efficient_explicit_sequence_record_number.h"
-#include "my_rand.h"
-#include "molecular_weight.h"
-#include "ode.h"
+// Custom header files
+#include "add_schedule.h"                        // Defines ADD_INTERVAL and ADD_TIMES constants
+#include "efficient_explicit_sequence_record_number.h" // Updates species counts after reactions
+#include "molecular_weight.h"                    // Calculates Mn, Mw
+#include "ode.h"                                 // Defines stiff_system for ODE integration
 
 using namespace std;
 
-int main( ) {
+int main() {
+    // Initialize random number generator
+    srandom((unsigned)time(NULL));
 
-    srandom( (unsigned)time(NULL) );
+    // Start timing the simulation
+    clock_t start, end;
+    start = clock();
 
-    clock_t start,end;
-    start=clock();
-
+    // Set input/output directories
     std::string data_dir = "/Users/yueyue/Dropbox/Mac/Documents/HKUST/PhD_project/P2_from_sequence_to_property/effATRP_MMA/src/";
-    std::string out_dir = "/Users/yueyue/Dropbox/Mac/Documents/HKUST/PhD_project/P2_from_sequence_to_property/effATRP_MMA/output/data20250413/new_CL/1e5/1";
+    std::string out_dir = "/Users/yueyue/Dropbox/Mac/Documents/HKUST/PhD_project/P2_from_sequence_to_property/effATRP_MMA/output/data20250423/PDI/1e5/20/";
 
-    //............. Declaration of varibles begins.....//
-    const double Na = 6.022e23;
-    const double R = 0.001986;    //kcal/mol/K
-    double mol_den[2];
-    double mol_wt[2];
-    double mol_frac[2], sol_mf = 0.0, mf_denm = 0.0, mf_monom = 0.0;
-    double temp;        //Tempetaure in K
-    double init_conc[2];   //mol/lit
-    double solvent_conc;
-    double time_limit;
-    double M0;
-    int reaction_index,index0=0,index1=0,index2=0,index3=0;
+    //-------------------------- Variable Declaration --------------------------//
+    // Physical constants
+    const double Na = 6.022e23;    // Avogadro's number
+    const double R = 0.001986;     // Gas constant (kcal/mol/K)
 
-    int Nscale=0;
-    int num_chain = -1;     //chain counter, every time a new chain added, make sure to assign an end unit to it
+    // Monomer and polymer properties
+    double mol_den;                // Monomer density (g/mL)
+    double mol_wt;                 // Monomer molecular weight (g/mol)
+    double mol_frac;               // Monomer molar fraction
+    double temp;                   // Temperature (K)
+    double init_conc[2];           // Initial concentrations of initiator and catalyst (mol/L)
+    double monomer_conc;           // Solvent concentration
+    double time_limit;             // Maximum simulation time
+    double M0;                     // Initial monomer concentration
 
-    double reaction_counter = 0.0, tau = 0.0;
-    double total_rate = 0.0, reaction = 0.0, time = 0.0, init_vol = 0.0, D_time = 0.0, d_time_0 = 0.0,d_time_1 = 0.0,d_time_2 = 0.0,pre_d_time = 0.0,pre_d_time_spe3 = 0.0,pre_d_time_spe2 = 0.0,aver_spe3=0.0,aver_radical=0.0;
-    double rand_11,rand_22;
+    // Reaction counters
+    int reaction_index;            // Current reaction type index
+    int num_chain = -1;            // Chain counter (incremented when new chain created)
+
+    // KMC variables
+    double reaction_counter = 0.0; // Cumulative counter for reaction selection
+    double tau = 0.0;              // Current reaction time step
+    double total_rate = 0.0;       // Sum of all reaction rates
+    double reaction = 0.0;         // Random value for reaction selection
+    double time = 0.0;             // Current simulation time
+    double init_vol = 0.0;         // Initial reaction volume
+    double D_time = 0.0;           // Time since last data output
+    double d_time = 0.0;           // Time tracker for scaling factor calculation
+    double pre_d_time_spe3 = 0.0;  // Time tracker for species 3 (radical) concentration
+    double pre_add_spe3 = 0.0;     // Accumulator for radical concentration * time
+    double aver_spe3 = 0.0;        // Average radical concentration
+    double rand_11, rand_22;       // Random numbers for KMC steps
+
+    // Species concentrations (array index corresponds to species type)
+    // [0]: Dr (dormant chains)
+    // [1]: C (catalyst)
+    // [2]: CX (deactivator)
+    // [3]: Pr* (active radical chains)
+    // [4]: M (monomer)
+    // [5]: P (terminated chains)
     double species[6] = {0};
-    long double s3=0.0;
-    double s5=0.0;
-    double species_all = 0;
-    double Area = 0;
-    double all_scale_fac = 0;
 
-    double rate[4] = {0.0};
-    double A[4] = {0.0}, E[4] = {0.0}, c[4] = {0.0};
-    double conversion[2] = {0.0}, over_x = 0.0, over_den = 0.0, over_num = 0.0;
-    double volume = 0.0, species_sum = 0.0, M_initial[2] = {0.0}, num_monomer[2] = {0.0};
-    double Mn = 0.0, Mw = 0.0, Mz = 0.0,pdi = 0.0, Dpn = 0.0, M_total = 0.0, M_total_square = 0.0;
-    double M_start[2] = {0.0}, M_present[2] = {0.0}, f_inst[2] = {0.0}, F_inst[2] = {0.0}, M_sum = 0.0, M_diff = 0.0;
-    double num_M[2] = {0}, f[2] = {0.0}, F[2] = {0.0}, num_M_sum = 0;
-    double num_Dr[1] = {0};
-    double num_Pr[1] = {0};
-    double num_P[1] = {0};
+    // Reaction rates and parameters
+    double rate[4] = {0.0};        // Current reaction rates
+    double c[4] = {0.0};           // Rate constants
 
-    double over_x_int = 0;
-    double Mn_int = 0;
-    double sum_sq_025 = 0;
-    double min_sum_sq_025 = 100;
-    double scale_fac = 1.0;
-    double scale_fac_s2 = 1.0;
-    double radical_ode0 = 0.0,radical_ode1 = 0.0,radical_ode2 = 0.0,radical_ode3 = 0.0,radical_ode4 = 0.0,radical_ode5 = 0.0;
-    double radical_kmc = 0.0;
-    double x[6]={0.0};
-    double start_t=0.0, end_t=5000.0, dt_t=5.0;
-    double radical[6] = {0.0};
-    double pre_add_spe3 = 0.0,add_spe2 = 0.0,pre_add_spe2 = 0.0;
-    int N[50000] = {0};
+    // Polymerization tracking variables
+    double conversion = 0.0;       // Monomer conversion
+    double volume = 0.0;           // Reaction volume
+    double species_sum = 0.0;      // Total species count (for composition calculation)
+    double M_initial = 0.0;        // Initial monomer amount
+    double num_monomer = 0.0;      // Monomer consumption counter
 
-    poly_chain poly_test;
-    stiff_system stiff_sys;
-    stiff_system_jacobi system_jacobi;
+    // Molecular weight properties
+    double Mn = 0.0;               // Number average molecular weight
+    double Mw = 0.0;               // Weight average molecular weight
+    double pdi = 0.0;              // Polydispersity index (Mw/Mn)
+    double Dpn = 0.0;              // Degree of polymerization
 
-// declaration of flags
-    int fl_conv = 0, fl_temp = 0, fl_init = 0, fl_mono = 0,fl_aver = 0;
-    int fl_mwd = 0, fl_ads = 0, fl_eq = 0;
-    int flag1 = 0,flag0 = 0;
-    double conv_in, temp_in, init_in, mono1_in, mono2_in;
-    double solv_mol = 0;
+    // Chain counters
+    double num_M = 0;              // Monomer units in polymer
+    double num_M_sum = 0;          // Total monomer units in polymer
+    double num_Dr = 0;             // Dormant chains
+    double num_Pr = 0;             // Active chains
+    double num_P = 0;              // Dead chains
 
-    //............. Declaration of varibles ends......//
-    //............. Assigning Input  data to the varibles from input.txt, Begins ......//
+    // Scaling factor for KMC/ODE hybrid method
+    double scale_fac = 1.0;        // Scaling factor for reaction rates
+    double radical_ode3 = 0.0;     // Radical concentration from ODE calculation
 
-    ifstream input0(data_dir + "input.txt");
-    input0 >> scale_fac;
-    input0 >> temp;
-    for (int i = 0; i < 2; i++)
-        input0 >> mol_den[i]; //7.01  9.4
-    for (int i = 0; i < 2; i++)
-        input0 >> mol_wt[i];  //128  100.0
-    for (int i = 0; i < 2; i++)
-        input0 >> mol_frac[i];  //0.58 0.0
-    for (int i = 0; i < 2; i++)
-        input0 >> init_conc[i];
+    // Chain length distribution
+    int N[50000] = {0};            // Chain length distribution array
 
-    input0 >> solvent_conc;
-    input0 >> time_limit;
-    input0 >> M0;
+    // Simulation component classes
+    poly_chain poly_test;          // Tracks polymer chains
+    stiff_system stiff_sys;        // ODE system definition
+    stiff_system_jacobi system_jacobi; // Jacobian matrix for ODE system
+
+    // Flags controlling simulation flow
+    int flag0 = 0;                 // Tracks first scaling factor calculation
+    int flag_add = 0;              // Controls initiator addition
+
+    //-------------------------- Read Input Data --------------------------//
+    // Read simulation parameters from input file
+    ifstream input(data_dir + "input.txt");
+    input >> scale_fac;           // Initial scaling factor
+    input >> temp;                // Temperature
+
+    input >> mol_den;             // Monomer density (9.4)
+    input >> mol_wt;              // Monomer molecular weight (100.0)
+    input >> mol_frac;            // Monomer molar fraction (0.58)
+
+    input >> init_conc[0] >> init_conc[1]; // Initial concentrations [0.023, 0.0115]
+
+    input >> monomer_conc;        // Solvent concentration
+    input >> time_limit;          // Maximum simulation time
+    input >> M0;                  // Initial monomer concentration
+
     for (int i = 0; i < 4; i++) {
-        input0 >> c[i];     //43.8; 2.4e7;1.65e3;2.82e7
-        //c[i] = A[i] * exp(-E[i] / (R * temp));
+        input >> c[i];            // Rate constants [43.8, 2.4e7, 1.65e3, 2.82e7]
     }
-    input0.close();
+    input.close();
 
-    //..............defining dependency graph......................//
+    //-------------------------- Setup Output Files --------------------------//
+    // Open output files for various simulation data
+    ofstream conv(out_dir + "conversion.out");            // Monomer conversion
+    ofstream molwt(out_dir + "molecularweight.out");      // Molecular weight properties
+    ofstream speciesout(out_dir + "species.out");         // Species counts
+    ofstream species_con(out_dir + "spe_con.out");        // Species concentrations
+    ofstream sf(out_dir + "scaling_factor.out");          // Scaling factor data
+    ofstream allchain(out_dir + "all_chain.out");         // Chain length data
+    ofstream kmc_log(out_dir + "kmc_add_times.txt");      // Initiator addition times
 
-
-//............. Assigning Input  data to the varibles from input.txt, Ends ......//
-
-    ofstream conv(out_dir + "Hy_conversion.out");
-    ofstream molwt(out_dir+"Hy_molecularweight.out");
-    ofstream speciesout(out_dir+"Hy_species.out");
-    ofstream species_con(out_dir+"Hy_spe_con.out");
-    ofstream rat(out_dir + "Hy_rate.out");
-    ofstream ode3(out_dir + "Hy_ode3.out");
-    ofstream index(out_dir + "Hy_reaction_index.out");
-    ofstream sf(out_dir + "Hy_scaling_factor.out");
-    ofstream aver(out_dir + "Hy_aver_spe3.out");
-    ofstream allchain(out_dir + "Hy_all_chain.out");
-    ofstream allchaininformation(out_dir + "Hy_allchain_information.txt");
-    ofstream kmc_log(out_dir+"kmc_add_times.txt");
-
-    //........................ 1. chain length output setting...........//
+    /*// Set chain length output thresholds (save polymer data at specific Dpn values)
     double dpnThresholds[] = {10, 20, 30, 40, 50, 60, 80, 100};
     const int N_THRESH = sizeof(dpnThresholds) / sizeof(dpnThresholds[0]);
     bool hasOutput[N_THRESH];
-    for(int i=0; i<N_THRESH; i++){
-        hasOutput[i] = false;   // 初始都还没输出过
-    }
+    for (int i = 0; i < N_THRESH; i++) {
+        hasOutput[i] = false;      // Initialize all thresholds as not reached
+    }*/
 
-    //........................conversion output setting...........//
-/*    double convThresholds[] = {0.10, 0.15, 0.20, 0.25, 0.30,0.35,0.40,0.45,0.50};
-    const int N_THRESH = sizeof(convThresholds) / sizeof(convThresholds[0]);
-    bool hasOutput[N_THRESH] = {false};*/
+    // Set chain length output thresholds (save polymer data at specific conversion values)
+    double convThresholds[] = {0.10, 0.15, 0.20, 0.25, 0.30,0.35,0.40,0.45,0.50};
+    const int N_THRESH_con = sizeof(convThresholds) / sizeof(convThresholds[0]);
+    bool hasOutput_con[N_THRESH_con] = {false};
 
-    conv << "time" << "\t" << "conversion(s)" << "\t" << "overall_conversion" << endl;
-    molwt << "time" << "\t" <<"conversion"<< "\t" << "Mn" << "\t" << "\t" << "Mw" << "\t"  << "pdi" << "\t"  << "Dpn"<< endl;
-    ofstream fract(out_dir+"fractions.out");
-    fract << "time" << "\t" << "\t" << "f" << "\t" << "\t" << "\t" << "\t" << "F" << "\t" << "\t" << "\t" << "\t"
-          << "f_inst" << "\t" << "\t" << "\t" << "\t" << "F_inst" << endl;
+    // Write headers to output files
+    conv << "time" << "\t" << "conversion" << endl;
+    molwt << "time" << "\t" << "conversion" << "\t" << "Mn" << "\t" << "\t" << "Mw" << "\t" << "pdi" << "\t" << "Dpn" <<  endl;
 
-    speciesout <<"time" << "\t"<<"species[0]" <<"\t"  <<"species[1] "<<"\t" <<"species[2]"<< "\t" <<"species[3] "<< "\t"<<" species[4]"<<  "\t"<<"species[5] " << endl;
-    speciesout <<"time" << "\t"<<"Dr" <<"\t"  <<"C "<<"\t" <<"CX"<< "\t" <<"Pr* "<< "\t"<<" M"<<  "\t"<<"P" << endl;
-//    timeput<<"time"<<" "<<"scale_fac"<<" "<<"pre_add_spe3"<<" "<<"pre_d_time_spe3"<<" "<<"aver_spe3"<<endl;
+    speciesout << "time" << "\t" << "species[0]" << "\t" << "species[1] " << "\t" << "species[2]" << "\t"
+               << "species[3] " << "\t" << " species[4]" << "\t" << "species[5] " << endl;
+    species_con << "time" << "\t" << "species[0]" << "\t" << "species[1] " << "\t" << "species[2]" << "\t"
+               << "species[3] " << "\t" << " species[4]" << "\t" << "species[5] " << endl;
 
-    init_vol=(M0*mol_frac[0])/(Na*4.67); //4.67=species[4]/ (Na * volume);
-    volume = init_vol;                   //total volume
-    cout << volume << endl;
+    sf << "time" << "\t"  << "scale_fac" << "\t" << "average kmc radical concentration" << "\t"
+       << "ode radical concentration" <<  endl;
 
-    //........................number of molecules of the species  ......//
-    species[0] = round(init_conc[0] * init_vol * Na + 0.5); //add0.5??
-    species[1] = round(init_conc[1]* init_vol * Na + 0.5);
-    species[4] = round(4.67 * init_vol * Na + 0.5);
+    //-------------------------- Initialization --------------------------//
+    // Calculate initial volume based on monomer amount
+    init_vol = (M0 * mol_frac) / (Na * monomer_conc); // 4.67 = normalized monomer concentration
+    volume = init_vol;                        // Set total reaction volume
+    cout << "Initial volume: " << volume << endl;
 
-    M_initial[0] = species[4];
-    M_start[0] = species[4];
-    //.......................adjust MWD .......................//
+    // Calculate initial molecule numbers for each species
+    species[0] = round(init_conc[0] * init_vol * Na + 0.5); // Initiator (Dr)
+    species[1] = round(init_conc[1] * init_vol * Na + 0.5); // Catalyst (C)
+    species[4] = round(monomer_conc * init_vol * Na + 0.5);         // Monomer (M)
 
-    //............2. adjust PDI ..........//
-    int add_times = ADD_TIMES, add_species0 ,add_species1 ,add_species4 ;
-    add_species0 = round( species[0]/add_times +0.5) ;
-    add_species1 = round ( species[1]/add_times +0.5);
+    M_initial = species[4];     // Store initial monomer amount
 
-    // Initial species adjustment
+    // Adjust PDI by adding initiator in multiple steps
+    int add_times = ADD_TIMES;     // Number of initiator addition steps (from add_schedule.h)
+    int add_species0, add_species1;
+
+    // Calculate molecules to add per step
+    add_species0 = round(species[0] / add_times + 0.5);  // Initiator per addition
+    add_species1 = round(species[1] / add_times + 0.5);  // Catalyst per addition
+
+    // Start with first portion of initiator and catalyst
     species[0] = add_species0;
     species[1] = add_species1;
 
-    vector<int> Dr(species[0],0);
-    std::vector<int> Dr_num(add_species0,0);
-    std::map<int, int> allchainsinfo;  // 创建一个新的map，键为链的序号，值为链的长度
+    // Initialize dormant chain vector
+    vector<int> Dr(species[0], 0);             // Dormant chain lengths (initially all 0)
+    std::vector<int> Dr_num(add_species0, 0);  // Dormant chain indices
 
+    // Create map to track all chain lengths (key=chain index, value=chain length)
+    std::map<int, int> allchainsinfo;
+
+    // Initialize ODE concentration vector (convert molecule counts to concentrations)
     vector_type r(6);
-    for (int i = 0; i < 6; ++i){
-        r[i] = species[i] / (Na * volume);
-        cout<<r[i]<<" ";
+    for (int i = 0; i < 6; ++i) {
+        r[i] = species[i] / (Na * volume);  // Convert to molar concentration
+        cout << r[i] << " ";
     }
-    cout<<endl;
+    cout << endl;
 
-    // 初始化所有链的长度为0，并初始化Dr_num
-    int i = 0;
-    for (int i = 0; i < Dr.size(); ++i)
-    {
-        allchainsinfo[i] = 0;
-        Dr_num[i] = i;  // 初始化为链的序号
+    // Initialize all chains with length 0 and assign chain indices
+    for (int i = 0; i < Dr.size(); ++i) {
+        allchainsinfo[i] = 0;      // All chains initially have length 0
+        Dr_num[i] = i;             // Assign chain indices
     }
-    cout<<species[0] <<" "<< species[1]<< "  "<< species[4]<<" "<<endl;
-    cout<<species[0]* add_times <<" "<< species[1]*add_times<< "  "<< species[4]*add_times<<" "<<endl;
 
-    //initialize the propensity functions//
-    rate[0] = c[0] * species[0] * species[1]/ (Na * volume);
-    rate[1] = 1 / scale_fac *  c[1] / (Na * volume) * species[2] * species[3];
-    rate[2] = 1 / scale_fac *  c[2] / (Na * volume) * species[3] * species[4];
-    rate[3] = 1 / scale_fac /scale_fac * c[3] * 2 / (Na * volume) * species[3] * (species[3]-1) / 2;
+    // Output initial species counts
+    cout << "Initial species[0]: " << species[0] << endl;
+    cout << "Initial species[1]: " << species[1] << endl;
+    cout << "Initial species[4]: " << species[4] << endl;
+    cout << "Total initiator: " << species[0] * add_times << endl;
+    cout << "Total catalyst: " << species[1] * add_times << endl;
+    cout << "Total monomer: " << species[4] << endl;
 
-    //................................... KMC Loop Begins ......//
-    int flag_4 = 1, flag_6 = 0, flag_add = 0, flag_write = 0;
-    int count_addtimes = 0;
-    double next_add_time = ADD_INTERVAL; // Start adding earlier for broader PDI
-//    double ADD_INTERVAL = 500.0;
+    // Initialize reaction rate constants (propensity functions for KMC)
+    // rate[0]: Activation - Dr + C → Pr* + CX
+    // rate[1]: Deactivation - Pr* + CX → Dr + C
+    // rate[2]: Propagation - Pr* + M → Pr* (longer chain)
+    // rate[3]: Termination - Pr* + Pr* → P
+    rate[0] = c[0] * species[0] * species[1] / (Na * volume);
+    rate[1] = 1 / scale_fac * c[1] / (Na * volume) * species[2] * species[3];
+    rate[2] = 1 / scale_fac * c[2] / (Na * volume) * species[3] * species[4];
+    rate[3] = 1 / scale_fac / scale_fac * c[3] * 2 / (Na * volume) * species[3] * (species[3] - 1) / 2;
 
-    allchaininformation <<Dpn<<" ";
-    for (auto& pair : allchainsinfo) {
-        allchaininformation  << pair.second<<"  ";
-    }
-    allchaininformation <<allchainsinfo.size() << "  " << endl; //for CL output
+    //-------------------------- KMC Simulation Loop --------------------------//
+    // Initialize KMC loop variables
+    int count_addtimes = 0;                      // Initiator addition counter
+    double next_add_time = ADD_INTERVAL;         // Next initiator addition time
 
+    // Main simulation loop (run until time_limit seconds)
+    while (time <= time_limit) {
+        //-------------- Adjust PDI by staged initiator addition --------------//
+        // Add more initiator at scheduled times to broaden molecular weight distribution
+        if (time > next_add_time && count_addtimes < (ADD_TIMES - 1) && flag_add == 0) {
+            kmc_log << time << endl;  // Record addition time
 
-
-    while (time <= 4000) {
-
-        //....................2. adjust PDI and MWD...............................//
-        if (time > next_add_time && count_addtimes < (ADD_TIMES-1) && flag_add == 0) {
-            kmc_log << time << endl;
-
+            // Add new initiator and catalyst
             species[0] += add_species0;
             species[1] += add_species1;
 
             count_addtimes++;
+
+            // Add new dormant chains to vector
             Dr.insert(Dr.end(), add_species0, 0);
+
+            // Add new chains to chain information map
             int current_size = allchainsinfo.size();
             for (int i = 0; i < add_species0; ++i) {
                 allchainsinfo[current_size + i] = 0;
             }
-            cout << time << "  " << species[0] << " " << add_species0 << " " << endl;
+
+            cout << "Adding initiator at time: " << time << ", new Dr count: " << species[0] << endl;
             flag_add = 1;
-            next_add_time += ADD_INTERVAL; // Adjust timing for next addition
+            next_add_time += ADD_INTERVAL;  // Schedule next addition
         }
         flag_add = 0;
 
-
+        //-------------- Generate random numbers for KMC step --------------//
         std::mt19937_64 rng(std::random_device{}());
         std::uniform_real_distribution<double> uni(0.0, 1.0);
-        double rand_11 = uni(rng);
-        double rand_22 = uni(rng);
+        rand_11 = uni(rng);  // For time step calculation
+        rand_22 = uni(rng);  // For reaction selection
 
-
+        //-------------- KMC Step 1: Calculate time step --------------//
+        // Calculate total reaction rate
         total_rate = 0.0;
-        for (int i = 0; i < 4; i++) total_rate = total_rate + rate[i];
-        tau = (1 / total_rate) * log (1 / rand_11);      // reaction time step
+        for (int i = 0; i < 4; i++) total_rate += rate[i];
 
+        // Calculate time step using KMC formula
+        tau = (1 / total_rate) * log(1 / rand_11);
+
+        //-------------- KMC Step 2: Select next reaction --------------//
         reaction = rand_22 * total_rate;
         reaction_counter = rate[0];
 
         reaction_index = 0;
-        while (reaction_counter < reaction)       // condition for which reaction to be excuted
-        {
+        // Find which reaction occurs based on random value
+        while (reaction_counter < reaction) {
             reaction_index++;
             reaction_counter += rate[reaction_index];
         }
 
-        if(reaction_index==0){index0++;}
-        if(reaction_index==1){index1++;}
-        if(reaction_index==2){index2++;}
-        if(reaction_index==3){index3++;}
+        //-------------- KMC Step 3: Update time and accumulators --------------//
+        time += tau;        // Advance simulation time
+        D_time += tau;      // Time since last data output
+        d_time += tau;      // Time for scaling factor calculation
 
-        over_den = 0.0;
-        over_num = 0.0;
-
-        time += tau;       // reaction time, sec
-        D_time += tau;
-        d_time_0 += tau;
-        d_time_1 += tau;
-        d_time_2 += tau;
-
-        pre_add_spe3 += species[3]*tau;
+        // Accumulate species[3]*time product for averaging
+        pre_add_spe3 += species[3] * tau;
         pre_d_time_spe3 += tau;
 
-
-        //.............calculate the SF ............//
-        if (d_time_1 > 0.0001 && flag0 == 0 && pre_d_time_spe3!=0.0){
-//at beginning with 1
-            ode(stiff_sys, system_jacobi,r,d_time_1);
+        //-------------- Calculate Scaling Factor (SF) --------------//
+        // Initial scaling factor calculation (run once at beginning)
+        if (d_time > 0.0001 && flag0 == 0 && pre_d_time_spe3 != 0.0) {
+            // Integrate ODE system to get ODE-based radical concentration
+            ode(stiff_sys, system_jacobi, r, d_time);
             radical_ode3 = r[3];
 
+            // For first calculation, use initial radical concentration of 1
             aver_spe3 = 1;
-            scale_fac =aver_spe3/ (Na * volume) / radical_ode3;
 
-            sf<<time<<"  "<<scale_fac <<" "<< aver_spe3/ (Na * volume)<<" "<<  radical_ode3<<" "<<"1111111"<<endl;
-            cout<<scale_fac <<" "<< pre_add_spe3/pre_d_time_spe3<<endl;
-            d_time_1=0.0;
+            // Scaling factor = KMC concentration / ODE concentration
+            scale_fac = aver_spe3 / (Na * volume) / radical_ode3;
+
+            // Output scaling factor data
+            sf << time << "  " << scale_fac << " " << aver_spe3 / (Na * volume) << " "
+               << radical_ode3 << " " << "1111111" << endl;
+            cout << "Initial scale factor: " << scale_fac << endl;
+
+            // Reset accumulators
+            d_time = 0.0;
             pre_add_spe3 = 0;
             pre_d_time_spe3 = 0;
-            flag0 = 1;
+            flag0 = 1;  // Mark first SF calculation as completed
         }
 
-// calculate the SF within 20s (average)
-        if (d_time_1>20.0  && pre_d_time_spe3!=0.0 ){
-            ode(stiff_sys, system_jacobi,r,d_time_1);
+        // Regular scaling factor calculation (every 20 seconds)
+        if (d_time >= 10.0 && pre_d_time_spe3 != 0.0) {
+            // Integrate ODE system
+            ode(stiff_sys, system_jacobi, r, d_time);
             radical_ode3 = r[3];
 
-            aver_spe3 = pre_add_spe3/pre_d_time_spe3;
-            scale_fac = (aver_spe3/(Na * volume))/radical_ode3;
+            // Calculate average radical concentration from KMC
+            aver_spe3 = pre_add_spe3 / pre_d_time_spe3;
 
-            sf<<time<<"  "<<scale_fac <<" "<< aver_spe3/ (Na * volume)<<" "<<  radical_ode3<<" "<<  pre_add_spe3/pre_d_time_spe3<<endl;
+            // Update scaling factor
+            scale_fac = (aver_spe3 / (Na * volume)) / radical_ode3;
 
+            // Output scaling factor data
+            sf << time << "  " << scale_fac << " " << aver_spe3 / (Na * volume) << " "
+               << radical_ode3 << " " << pre_add_spe3 / pre_d_time_spe3 << endl;
+
+            // Reset accumulators
             pre_add_spe3 = 0;
             pre_d_time_spe3 = 0;
-            d_time_1=0.0;
+            d_time = 0.0;
         }
 
+        //-------------- Periodic Data Output (every 1.0 second) --------------//
+        if (D_time >= 1.0) {
+            // Output species data (counts and concentrations)
+            speciesout << time;
+            species_con << time;
+            speciesout << " " << species[0] << " " << species[1] << " " << species[2] << " "
+                       << species[3] << " " << species[4] << " " << species[5] << " " << endl;
+            species_con << " " << species[0] / (Na * volume) << " " << species[1] / (Na * volume) << " "
+                        << species[2] / (Na * volume) << " " << species[3] / (Na * volume) << " "
+                        << species[4] / (Na * volume) << " " << species[5] / (Na * volume) << " " << endl;
+
+            // Output conversion data
+            conversion = num_monomer / M_initial;
+            conv << time << "\t" << conversion << endl;
+
+            // Calculate molecular weight properties
+            molecular_weight(&mol_wt,
+                             Mn,          // Number average molecular weight
+                             Mw,          // Weight average molecular weight
+                             &num_M,      // Monomer units in polymer
+                             &num_Dr,     // Dormant chains
+                             &num_Pr,     // Active chains
+                             &num_P,      // Dead chains
+                             Dr,          // Dormant chain vector
+                             Pr,          // Active chain vector
+                             N,           // Chain length distribution
+                             scale_fac,   // Scaling factor
+                             poly_test.chain1); // Dead chain vector
+
+            // Calculate polydispersity index
+            pdi = Mw / Mn;
+
+            // Update composition tracking
+            species_sum += species[4];
+            num_M_sum += num_M;
+
+            // Calculate degree of polymerization
+            Dpn = num_M_sum / (poly_test.chain1.size() + Dr.size() + Pr.size());
+
+            // Output molecular weight and composition data
+            molwt << time << "\t" << conversion << "\t" << Mn << "\t" << "\t" << Mw << "\t" << "\t"
+                  << pdi << "\t" << "\t" << Dpn << endl;
+
+            //-------------- Output Chain Info at Dpn Thresholds --------------//
+            /*for (int i = 0; i < N_THRESH; i++) {
+                // If Dpn threshold reached and not yet output, write chain data
+                if (!hasOutput[i] && (Dpn >= dpnThresholds[i])) {
+                    hasOutput[i] = true;  // Mark threshold as output
+
+                    // Generate filename for this threshold
+                    int val = (int)dpnThresholds[i];
+                    std::string fname = out_dir + "chain_length_" + to_string(val) + ".out";
+                    ofstream outChain(fname);
+
+                    // Write all chain lengths to file
+                    // First dormant chains (Dr)
+                    for (size_t k = 0; k < Dr.size(); ++k) {
+                        outChain << Dr[k] << " ";
+                    }
+
+                    // Then dead chains (poly_test.chain1)
+                    for (size_t k = 0; k < poly_test.chain1.size(); ++k) {
+                        outChain << poly_test.chain1[k] << " ";
+                    }
+
+                    // Finally active chains (Pr)
+                    for (size_t k = 0; k < Pr.size(); ++k) {
+                        outChain << Pr[k] << " ";
+                    }
+                    outChain << endl;
+                    outChain.close();
+                }
+            }*/
 
 
-            if (D_time >= 1.0) {
-
-                //...................1. Output chain information...................//
-                /*for (int i = 0; i < N_THRESH; i++) {
-                    if (!hasOutput[i] && conversion[0] >= covThresholds[i]) {
-                        hasOutput[i] = true;
-                        cout << "Outputting at conversion: " << covThresholds[i] << endl; // 调试输出
+            //-------------- Output Chain Info at Dpn Thresholds --------------//
+            for (int i = 0; i < N_THRESH_con; i++) {
+                    if (!hasOutput_con[i] && conversion >= convThresholds[i]) {
+                        hasOutput_con[i] = true;
+                        cout << "Outputting at conversion: " << convThresholds[i] << endl; // 调试输出
                         // 现有输出代码保持不变
-                        std::string fname = out_dir + "Hy_all_chain_conv_" + to_string(int(covThresholds[i] * 100)) + ".out";
+                        std::string fname = out_dir + "all_chain_conv_" + to_string(int(convThresholds[i] * 100)) + ".out";
                         ofstream outChain(fname);
                         if (!outChain.is_open()) {
                             cerr << "Failed to open file: " << fname << endl;
@@ -341,181 +449,62 @@ int main( ) {
                         outChain << endl;
                         outChain.close();
                     }
-                }*/
-
-            D_time = 0;
-            speciesout << time;
-            species_con << time;
-            index << time;
-            ode3<<time;
-
-            speciesout<<" " << species[0]<<" "<< species[1]<<" "<< species[2]<<" "<< species[3]<<" "<< species[4]<<" " << species[5]<<" "<< endl;
-            species_con<<" " << species[0]/ (Na * volume)<<" "<< species[1]/ (Na * volume)<<" "<< species[2]/ (Na * volume)<<" "<< species[3]/ (Na * volume)<<" "<< species[4]/ (Na * volume)<<" " << species[5]/ (Na * volume)<<" "<< endl;
-            index << " " << index0 << " " << index1 << " " << index2 << " " << index3 <<endl;
-            index << " " << rate[0] << " " << rate[1]  << " " << rate[2]  << " " << rate[3]  <<endl;
-
-            rat <<time<<"  " <<rate[0]<<" " <<rate[1]<<" " <<rate[2]<<" " <<rate[3]<<endl;
-
-            conversion[0] = num_monomer[0] / M_initial[0];
-            M_sum += M_start[0] + M_present[0];
-            M_diff += M_start[0] - M_present[0];
-            over_num += num_monomer[0];
-            over_den += M_initial[0];
-
-            over_x = over_num / over_den;
-            conv << time << "\t" << conversion[0] <<  "\t" << over_x << endl;
-
-            f_inst[0] = (M_present[0] + M_start[0]) / (M_sum);
-            F_inst[0] = (M_start[0] - M_present[0]) / (M_diff);
-
-            M_start[0] = M_present[0];
-            //          M_start[1] = M_present[1];
-            num_M[0] = 0;
-            //          num_M[1] = 0;
-            num_M_sum = 0.0;
-            species_sum = 0.0;
-            num_M_sum = 0.0;
-            species_sum = 0.0;
-
-                if (fl_mwd == 0) {
-                    molecular_weight(mol_wt,
-                                     Mn,
-                                     Mw,
-                                     Mz,
-                                     num_M,
-                                     num_Dr,
-                                     num_Pr,
-                                     num_P,
-                                     Dr,
-                                     Pr,
-                                     N,
-                                     scale_fac,
-                                     poly_test.chain1); // function for calculating molecular weight
-                    pdi = Mw / Mn;
-                    species_sum += species[4];
-                    num_M_sum += num_M[0];
-
-
-                    f[0] = species[4] / species_sum;   //avg compostion of monomers in the feed
-                    F[0] = num_M[0] / (num_M_sum);       //avg compostion of monomers in the dead end polymer chains
-
-                    //Dpn = num_M_sum / (poly_test.chain1.size()+ Dr.size()+ Pr.size()/scale_fac);    // degree of polymerization
-                    Dpn = num_M_sum / (poly_test.chain1.size()+ Dr.size()+ Pr.size());    // degree of polymerization
-                    molwt << time << "\t" << Mn << "\t" << "\t" << Mw << "\t" << "\t" << pdi << "\t" << "\t" << Dpn<<"\t" << Mz << endl;
-                    fract << time << "\t" << f[0] << "\t" << F[0] <<  "\t" << f_inst[0]
-                          << "\t" << F_inst[0]  << endl;
-
-
-                    //...................1. Output chain information...................//
-                    for(int i=0; i<N_THRESH; i++){
-                        // 如果 Dpn >= dpnThresholds[i] 且还没输出过，就写文件
-                        if(!hasOutput[i] && (Dpn >= dpnThresholds[i])) {
-                            hasOutput[i] = true; // 标记已经输出过
-                            // 生成文件名，例如 "Hy_all_chain_10.out"
-                            // 如果是小数，需要再做些字符串处理，这里阈值都是整数就简单了
-                            int val = (int) dpnThresholds[i];
-                            std::string fname = out_dir + "Hy_all_chain_" + to_string(val) + ".out";
-                            ofstream outChain(fname);
-
-                            // 将 Dr、poly_test.chain1、Pr 的内容输出到 outChain
-                            for(size_t k=0; k<Dr.size(); ++k) {
-                                outChain << Dr[k] << " ";
-                            }
-                            for(size_t k=0; k<poly_test.chain1.size(); ++k) {
-                                outChain << poly_test.chain1[k] << " ";
-                            }
-                            for(size_t k=0; k<Pr.size(); ++k) {
-                                outChain << Pr[k] << " ";
-                            }
-                            outChain << endl;
-
-                            outChain.close();
-                        }
-                    }
-
-
-
                 }
 
+            // Reset counters for next data collection period
+            num_M = 0;
+            num_M_sum = 0.0;
+            D_time = 0;
         }
 
+        //-------------- KMC Step 4: Execute selected reaction --------------//
+        // Update species counts based on selected reaction
+        efficient_explicit_sequence_record_number(
+                reaction_index,  // Type of reaction to execute
+                &num_monomer,    // Monomer consumption counter
+                species,         // Species counts
+                num_chain,       // Chain counter
+                Dr,              // Dormant chain vector
+                Dr_num,          // Dormant chain indices
+                Pr,              // Active chain vector
+                allchainsinfo,   // Chain length mapping
+                allchains,       // All chains vector
+                poly_test        // Polymer chain data
+        );
 
-        efficient_explicit_sequence_record_number(reaction_index,
-                                                  num_monomer,
-                                                  species,
-                                                  num_chain,
-                                                  Dr,
-                                                  Dr_num,
-                                                  Pr,
-                                                  allchainsinfo,
-                                                  allchains,
-                                                  poly_test
-        );  //function for updating species info when event occurs
-
-
-        all_scale_fac += scale_fac*tau;
-
-        // update rates
-        rate[0] = c[0] * species[0]* species[1]/ (Na * volume);
-        rate[1] =1 / scale_fac   *  c[1] / (Na * volume) * species[2] * species[3];
-        rate[2] =1 / scale_fac *  c[2] / (Na * volume) * species[3] * species[4];
+        //-------------- KMC Step 5: Update reaction rates --------------//
+        // Recalculate propensity functions based on updated species counts
+        // Activation: Dr + C → Pr* + CX
+        rate[0] = c[0] * species[0] * species[1] / (Na * volume);
+        rate[1] = 1 / scale_fac * c[1] / (Na * volume) * species[2] * species[3];
+        rate[2] = 1 / scale_fac * c[2] / (Na * volume) * species[3] * species[4];
         rate[3] = 1 / scale_fac / scale_fac * c[3] * 2 / (Na * volume) * species[3] * (species[3] - 1) / 2;
-
-        M_present[0] = species[4];
-        //      M_present[1] = species[3];
-        M_sum = 0.0;
-        M_diff = 0.0;
-
     }
 
+    //-------------------------- Finish Simulation --------------------------//
+    // Output final chain information and statistics
+    cout << "Dr.size(): " << Dr.size() << endl;         // Report number of dormant chains
+    cout << "poly_M1.size(): " << poly_test.chain1.size() << endl;  // Report number of dead chains
+    cout << "Pr.size(): " << Pr.size() << endl;         // Report number of active chains
 
-    /*................................ KMC Loop ends here..........................*/
-    if (fl_mwd == 1) {
-        molecular_weight(mol_wt,
-                         Mn,
-                         Mw,
-                         Mz,
-                         num_M,
-                         num_Dr,
-                         num_Pr,
-                         num_P,
-                         Dr,
-                         Pr,
-                         N,
-                         scale_fac,
-                         poly_test.chain1); // function for calculating molecular weight
-        pdi = Mw / Mn;
-        species_sum += species[4];
-        num_M_sum += num_M[0];
-
-        f[0] = species[4] / species_sum;   //avg compostion of monomers in the feed
-        F[0] = num_M[0] / (num_M_sum);       //avg compostion of monomers in the dead end polymer chains
-
-        Dpn = num_M_sum / (poly_test.chain1.size()+ Dr.size()+ Pr.size());    // degree of polymerization
-        molwt << time << "\t" << Mn << "\t" << "\t" << Mw << "\t" << "\t" << pdi << "\t" << "\t" << Dpn << "\t" << Mz<< endl;
-        fract << time << "\t" << f[0] << "\t" << F[0] <<  "\t" << f_inst[0]
-              << "\t" << F_inst[0]  << endl;
-
-    }
-
-
-    cout<<"Dr.size()"<<  Dr.size()<<endl;
-    cout<<"poly_M1.size()"<<   poly_test.chain1.size()<<endl;
-    cout<<"Pr.size()"<<  Pr.size()<<endl;
-
+    // Write all final chain lengths to output file
+    // Format: [dormant chains] [dead chains] [active chains]
     for (size_t i = 0; i < Dr.size(); ++i) {
-        allchain <<  Dr[i]<< " ";
+        allchain << Dr[i] << " ";                     // Dormant chain lengths
     }
 
     for (size_t i = 0; i < poly_test.chain1.size(); ++i) {
-            allchain << poly_test.chain1[i]<< " ";
+        allchain << poly_test.chain1[i] << " ";       // Dead chain lengths
     }
-    for (size_t i = 0; i < Pr.size(); ++i) {
-        allchain <<  Pr[i]<< " ";
-    }
-    allchain<<endl;
 
-    end=clock();
-    ode3<<"runnning time = "<<(double)(end-start)/CLOCKS_PER_SEC<<"s"<<endl;
+    for (size_t i = 0; i < Pr.size(); ++i) {
+        allchain << Pr[i] << " ";                     // Active chain lengths
+    }
+    allchain << endl;
+
+    // Calculate and output total run time
+    end = clock();
+    cout << "Running time = " << (double)(end-start)/CLOCKS_PER_SEC << "s" << endl;
+
     return 0;
 }
